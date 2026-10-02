@@ -75,7 +75,7 @@ JOIN_GROUP_LINK = "https://t.me/+_0kBIVQujUEyOTc1"
 JOIN_CHANNEL_LINK = "https://t.me/+3dlEoWK-vGcwMDI9"
 FORCE_JOIN_IMAGES = ["", ""]
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://web-production-e6929.up.railway.app/shopify")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://web-production-0919d.up.railway.app/shopify")
 RAZORPAY_API_URL = os.getenv("RAZORPAY_API_URL", "https://rz.rcvan.indevs.in/rz")
 
 SP_PER_USER_WORKERS = 30; MSP_PER_USER_WORKERS = 70; RZ_PER_USER_WORKERS = 30
