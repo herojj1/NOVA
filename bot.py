@@ -704,8 +704,9 @@ async def is_user_joined(user_id):
         _is_in_chat(user_id, FORCE_JOIN_CHATS[1][0]),
         return_exceptions=True)
     for r in results:
-        if r is False:
-            return False    _JOIN_CACHE[user_id] = now
+                if r is False:
+            return False
+    _JOIN_CACHE[user_id] = now
     return True
 
 
