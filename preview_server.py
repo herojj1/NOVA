@@ -1,70 +1,203 @@
 """
-Preview server for Replit — serves the /docs UI with mocked endpoints.
-Extracts _DOCS_HTML directly from api_server.py via AST (no checkout_engine import).
+rz_harvester.py — RazorPay page discovery + health scan.
+
+Public API:
+  - scan_file(src_path, dst_path, proxy, workers, on_progress)
+              -> (live, dead, errors)
+  - harvest_from_seeds(seeds, keyword, dst_path, proxy, workers, on_progress)
+              -> (live, dead, errors)
 """
-import os, ast, pathlib
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from __future__ import annotations
 
-def _load_docs_html():
-    src = (pathlib.Path(__file__).parent / "api_server.py").read_text()
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name) and t.id == "_DOCS_HTML":
-                    return ast.literal_eval(node.value)
-    # v3.0.0 moved _DOCS_HTML handling; preview falls back to a tiny stub
-    return "<html><body><h1>CardCheckout API</h1><p>docs moved — run api_server.py</p></body></html>"
+import os
+import re
+import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-_DOCS_HTML = _load_docs_html()
+import httpx
 
-app = FastAPI(docs_url=None, redoc_url=None)
+_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+]
 
-@app.get("/", include_in_schema=False)
-async def root():
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/docs")
+_RZ_SLUG_HINTS = [
+    "donate", "donation", "pay", "payment", "paynow", "checkout",
+    "fees", "booking", "order", "store", "shop", "buy", "cart",
+    "subscription", "subscribe", "register", "ticket", "course",
+    "schoolfees", "collegefees", "tuition", "seva", "daan",
+    "fund", "temple", "church", "mandir", "trust", "foundation",
+    "ngo", "charity", "welfare", "sponsor", "support",
+]
 
-@app.get("/docs", include_in_schema=False)
-async def docs():
-    return HTMLResponse(
-        _DOCS_HTML,
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            "Pragma": "no-cache",
-        }
-    )
 
-@app.get("/health")
-async def health():
-    return {"ok": True, "threads": 200, "retries": 1, "engine_version": "3.0.0", "captcha_aware": True}
+def _probe(url: str, proxy: str | None, timeout: float = 10.0) -> dict:
+    if not url:
+        return {"url": "", "ok": False, "reason": "empty"}
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
 
-@app.get("/check")
-async def check_get(card: str = "", url: str = "", proxy: str = "", low: str = "true"):
-    return {
-        "status": "CHARGED",
-        "status_code": "ORDER_PLACED",
-        "amount": "2.99",
-        "error": "",
-        "retryable": False,
-        "captcha": False,
-        "receipt_url": "https://demo-store.myshopify.com/orders/12345",
+    if proxy and not proxy.startswith(("http://", "https://", "socks")):
+        seg = proxy.split(":")
+        if len(seg) == 4:
+            proxy = f"http://{seg[2]}:{seg[3]}@{seg[0]}:{seg[1]}"
+        elif len(seg) == 2:
+            proxy = f"http://{seg[0]}:{seg[1]}"
+
+    kw = {
+        "timeout": timeout,
+        "follow_redirects": True,
+        "headers": {"User-Agent": random.choice(_UA_POOL),
+                    "Accept": "text/html,application/xhtml+xml"},
     }
+    if proxy:
+        kw["proxy"] = proxy
 
-@app.post("/check")
-async def check_post():
-    return {
-        "status": "CHARGED",
-        "status_code": "ORDER_PLACED",
-        "amount": "2.99",
-        "error": "",
-        "retryable": False,
-        "captcha": False,
-        "receipt_url": "https://demo-store.myshopify.com/orders/12345",
-    }
+    try:
+        r = httpx.get(url, **kw)
+        if r.status_code != 200:
+            return {"url": url, "ok": False, "reason": f"HTTP {r.status_code}"}
+        body = r.text or ""
+        markers = ("payment_link_id", "razorpay", "checkout.js", "rzp_")
+        if not any(m in body for m in markers):
+            return {"url": url, "ok": False, "reason": "not razorpay"}
+        if any(m in body.lower() for m in ("link expired", "link not found", "no longer active")):
+            return {"url": url, "ok": False, "reason": "link expired"}
+        return {"url": url, "ok": True, "reason": "ok"}
+    except httpx.TimeoutException:
+        return {"url": url, "ok": False, "reason": "timeout"}
+    except httpx.ProxyError as e:
+        return {"url": url, "ok": False, "reason": f"proxy: {str(e)[:40]}"}
+    except Exception as e:
+        return {"url": url, "ok": False, "reason": str(e)[:60]}
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+
+def _read_lines(path: str) -> list:
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    except Exception:
+        return []
+
+
+def _write_lines(path: str, lines: list):
+    with open(path, "w", encoding="utf-8") as f:
+        for ln in lines:
+            f.write(ln + "\n")
+
+
+def scan_file(src_path: str, dst_path: str, proxy: str | None,
+              workers: int = 30, on_progress=None):
+    raw = _read_lines(src_path)
+    urls = []
+    seen = set()
+    for r in raw:
+        u = r.strip().rstrip("/")
+        if not u.startswith(("http://", "https://")):
+            u = "https://" + u
+        if u not in seen:
+            seen.add(u)
+            urls.append(u)
+
+    live, dead, errors = [], [], []
+    total = len(urls)
+    if total == 0:
+        return live, dead, errors
+
+    done = [0]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_probe, u, proxy): u for u in urls}
+        for fut in as_completed(futs):
+            u = futs[fut]
+            try:
+                res = fut.result()
+            except Exception as e:
+                res = {"url": u, "ok": False, "reason": str(e)[:60]}
+            done[0] += 1
+            if res["ok"]:
+                live.append(res["url"])
+            elif res.get("reason", "").startswith(("timeout", "proxy")):
+                errors.append(res["url"])
+            else:
+                dead.append(res["url"])
+            if on_progress:
+                try:
+                    on_progress(done[0], total, res)
+                except Exception:
+                    pass
+
+    _write_lines(dst_path, live)
+    return live, dead, errors
+
+
+def harvest_from_seeds(seeds: list, keyword: str | None, dst_path: str,
+                        proxy: str | None, workers: int = 30, on_progress=None):
+    candidates = []
+    seen = set()
+
+    for s in seeds:
+        slug = re.sub(r"[^a-zA-Z0-9\-_]", "", s.rstrip("/").split("/")[-1])
+        if not slug:
+            continue
+        u = f"https://pages.razorpay.com/{slug}"
+        if u not in seen:
+            seen.add(u)
+            candidates.append(u)
+
+    hints = list(_RZ_SLUG_HINTS)
+    if keyword:
+        kw = re.sub(r"[^a-z0-9\-]", "", keyword.lower())
+        if kw:
+            hints = [kw] + [f"{kw}{s}" for s in ("now", "pay", "donate", "page")] + hints
+
+    for slug in hints:
+        if len(candidates) >= 500:
+            break
+        u = f"https://pages.razorpay.com/{slug}"
+        if u not in seen:
+            seen.add(u)
+            candidates.append(u)
+
+    live, dead, errors = [], [], []
+    total = len(candidates)
+    if total == 0:
+        return live, dead, errors
+
+    done = [0]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_probe, u, proxy): u for u in candidates}
+        for fut in as_completed(futs):
+            u = futs[fut]
+            try:
+                res = fut.result()
+            except Exception as e:
+                res = {"url": u, "ok": False, "reason": str(e)[:60]}
+            done[0] += 1
+            if res["ok"]:
+                live.append(res["url"])
+            elif res.get("reason", "").startswith(("timeout", "proxy")):
+                errors.append(res["url"])
+            else:
+                dead.append(res["url"])
+            if on_progress:
+                try:
+                    on_progress(done[0], total, res)
+                except Exception:
+                    pass
+
+    existing = _read_lines(dst_path)
+    existing_set = {u.strip().rstrip("/") for u in existing if u}
+    appended = 0
+    for u in live:
+        if u not in existing_set:
+            existing.append(u)
+            existing_set.add(u)
+            appended += 1
+    if appended:
+        _write_lines(dst_path, existing)
+
+    return live, dead, errors
