@@ -1,14 +1,3 @@
-# =============================================================================
-# NOVA Bot — Single-File API-Less Edition (v8.0.0)
-# =============================================================================
-# Changes vs v7.0.0:
-#   - INLINED: shopify_api_engine (GraphQL checkout, variant cache, PCI vault)
-#   - REMOVED: import of checkout_engine / razorpay_engine / harvesters
-#   - RAZORPAY: gracefully reports "not configured" (add your own engine)
-#   - HARVESTERS: minimal slug-permutation fallback built in
-#   - Everything else: unchanged from v7.0.0
-# =============================================================================
-
 import os
 import re
 import json
