@@ -5,12 +5,10 @@ __pycache__/
 .venv/
 venv/
 *.log
-
-# Runtime state — auto-created on boot
+variant_cache.json
 premium_users.json
 user_proxies.json
 keys.json
-sites.txt
 rank.json
 settings.json
 premium_daily.json
@@ -19,9 +17,8 @@ referrals.json
 streaks.json
 site_stats.json
 shopify_last_scan.json
-variant_cache.json
+sites.txt
+rz_sites.txt
 admins.json
 .welcome_file_id.txt
-
-# Video cache
 videos/
