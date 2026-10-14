@@ -2,19 +2,24 @@
 shopify_harvester.py — Shopify site discovery + health scan.
 
 Public API:
-  - scan_file(src_path, dst_path, proxy, min_price, max_price,
-              workers, on_progress) -> (live, dead, over, errors)
-  - harvest_from_seeds(seeds, keyword, dst_path, proxy,
-                       min_price, max_price, workers, on_progress)
-                       -> (live, dead, over, errors)
+    scan_file(src_path, dst_path, proxy, min_price, max_price, workers, on_progress)
+    harvest_from_seeds(seeds, keyword, dst_path, proxy, min_price, max_price, workers, on_progress)
+    load_keywords()
+    load_seeds(path="seeds.txt")
+
+Both scan_file and harvest_from_seeds return a 4-tuple:
+    (live, dead, over, errors)  — lists of URLs
 """
 from __future__ import annotations
 
 import os
 import re
+import json
 import random
+import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import httpx
 
@@ -26,6 +31,10 @@ _UA_POOL = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 ]
+
+_HERE = Path(__file__).parent
+_KEYWORDS_FILE = _HERE / "keywords.txt"
+_SEEDS_FILE = _HERE / "seeds.txt"
 
 _DIRECTORY = [
     "https://shop.app/api/search?query={q}&limit=250",
@@ -39,7 +48,34 @@ _DEFAULT_KEYWORDS = [
 ]
 
 
-def _normalize(raw: str) -> str:
+def load_keywords() -> list:
+    try:
+        if _KEYWORDS_FILE.is_file():
+            lines = [
+                ln.strip() for ln in _KEYWORDS_FILE.read_text(encoding="utf-8").splitlines()
+            ]
+            lines = [ln for ln in lines if ln and not ln.startswith("#")]
+            if lines:
+                return lines
+    except Exception:
+        pass
+    return list(_DEFAULT_KEYWORDS)
+
+
+def load_seeds(path: str = None) -> list:
+    p = Path(path) if path else _SEEDS_FILE
+    try:
+        if p.is_file():
+            return [
+                ln.strip() for ln in p.read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+    except Exception:
+        pass
+    return []
+
+
+def _normalize(raw) -> str:
     if not raw:
         return ""
     s = str(raw).strip().lower()
@@ -54,7 +90,7 @@ def _normalize(raw: str) -> str:
     return s
 
 
-def _probe(domain: str, proxy_url: str | None,
+def _probe(domain: str, proxy_url: str,
            min_price: float, max_price: float,
            timeout: float = 10.0) -> dict:
     if not domain:
@@ -133,9 +169,18 @@ def _write_lines(path: str, lines: list):
             f.write(ln + "\n")
 
 
-def scan_file(src_path: str, dst_path: str, proxy: str | None,
-              min_price: float, max_price: float, workers: int = 30,
-              on_progress=None):
+# ══════════════════════════════════════════════════════════════════════
+#  PUBLIC API
+# ══════════════════════════════════════════════════════════════════════
+def scan_file(
+    src_path: str,
+    dst_path: str,
+    proxy: str,
+    min_price: float,
+    max_price: float,
+    workers: int = 30,
+    on_progress=None,
+) -> tuple:
     raw = _read_lines(src_path)
     domains = []
     seen = set()
@@ -179,9 +224,16 @@ def scan_file(src_path: str, dst_path: str, proxy: str | None,
     return live, dead, over, errors
 
 
-def harvest_from_seeds(seeds: list, keyword: str | None, dst_path: str,
-                        proxy: str | None, min_price: float, max_price: float,
-                        workers: int = 30, on_progress=None):
+def harvest_from_seeds(
+    seeds: list,
+    keyword: str,
+    dst_path: str,
+    proxy: str,
+    min_price: float,
+    max_price: float,
+    workers: int = 30,
+    on_progress=None,
+) -> tuple:
     candidates = []
     seen = set()
 
@@ -192,7 +244,7 @@ def harvest_from_seeds(seeds: list, keyword: str | None, dst_path: str,
             candidates.append(d)
 
     kws = [keyword] if keyword else []
-    kws.extend(_DEFAULT_KEYWORDS)
+    kws.extend(load_keywords())
     kws = [re.sub(r"[^a-z0-9\-]", "", k.lower()) for k in kws if k]
     kws = [k for k in kws if k]
 
@@ -222,18 +274,18 @@ def harvest_from_seeds(seeds: list, keyword: str | None, dst_path: str,
         if len(candidates) >= 500:
             break
         for suf in suffixes:
-            slug = f"{kw}{suf}" if suf else kw
+            slug = f"{kw}{suf}"
             d = f"{slug}.myshopify.com"
             if d not in seen:
                 seen.add(d)
                 candidates.append(d)
 
     live, dead, over, errors = [], [], [], []
-    done = [0]
     total = len(candidates)
     if total == 0:
         return live, dead, over, errors
 
+    done = [0]
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_probe, d, proxy, min_price, max_price): d for d in candidates}
         for fut in as_completed(futs):
