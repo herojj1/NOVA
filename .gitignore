@@ -6,12 +6,11 @@ __pycache__/
 venv/
 *.log
 
-# Runtime state (regenerated on first run)
+# Runtime state — auto-created on boot
 premium_users.json
 user_proxies.json
 keys.json
 sites.txt
-rz_sites.txt
 rank.json
 settings.json
 premium_daily.json
@@ -19,14 +18,10 @@ user_daily_limits.json
 referrals.json
 streaks.json
 site_stats.json
-rz_sites_last_scan.json
 shopify_last_scan.json
+variant_cache.json
 admins.json
 .welcome_file_id.txt
 
 # Video cache
 videos/
-
-# Harvest state
-site_cache.json
-harvest_state.json
