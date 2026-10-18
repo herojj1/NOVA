@@ -22,3 +22,5 @@ rz_sites.txt
 admins.json
 .welcome_file_id.txt
 videos/
+site_cache.json
+harvest_state.json
