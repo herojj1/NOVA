@@ -167,7 +167,7 @@ def cmd_chip(cmd: str, style: str = "•") -> str:
 # =============================================================================
 API_ID    = int(os.getenv("API_ID") or 33657928)
 API_HASH  = os.getenv("API_HASH", "a61fde61442113b9a65c699f7020d59a")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8881611682:AAGUaw5qi17Qy3cLGtJwIe6qXoK17WcW_lU")
 ADMIN_ID  = [8871910561]
 
 ADMIN_ID_FILE = "admins.json"
