@@ -6,17 +6,6 @@ __pycache__/
 venv/
 *.log
 variant_cache.json
-premium_users.json
-user_proxies.json
-keys.json
-rank.json
-settings.json
-premium_daily.json
-user_daily_limits.json
-referrals.json
-streaks.json
-site_stats.json
-shopify_last_scan.json
 sites.txt
 rz_sites.txt
 admins.json
